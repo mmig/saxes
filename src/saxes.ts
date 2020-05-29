@@ -321,7 +321,10 @@ export type EventNameToHandler<O, N extends EventName> = {
   "ready": ReadyHandler;
 }[N];
 
-export interface Location {
+/**
+ * The position of a character within the document
+ */
+export interface Position {
   /** The line number. */
   line: number;
 
@@ -333,13 +336,14 @@ export interface Location {
 }
 
 /**
- * The position of an element within the document
+ * The location (start and end) of an element within the document
  */
-export interface Position {
+export interface Location {
   /** The start position of the element. */
-  start: Location;
+  start: Position;
+
   /** The end position of the element. */
-  end: Location;
+  end: Position;
 }
 
 /**
@@ -348,10 +352,10 @@ export interface Position {
  */
 export interface AttributePosition {
   /** The position of the attribute's name. */
-  namePosition?: Position;
+  namePosition?: Location;
 
   /** The position of the attribute's value. */
-  valuePosition?: Position;
+  valuePosition?: Location;
 }
 
 /**
@@ -632,7 +636,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private chunkPosition!: number;
   private i!: number;
 
-  private attrPosition?: Position;
+  private attrPosition?: Location;
 
   //
   // We use prevI to allow "ungetting" the previously read code point. Note
@@ -661,7 +665,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private getCode!: () => number;
   private isChar!: (c: number) => boolean;
   private pushAttrib!: (name: string, value: string,
-    namePosition?: Position, valuePosition?: Position) => void;
+    namePosition?: Location, valuePosition?: Location) => void;
   private _closed!: boolean;
   private currentXMLVersion!: string;
   private readonly stateTable: ((this: SaxesParser<O>) => void)[];
@@ -2121,7 +2125,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     const c = this.captureNameChars();
     if (this.includeAttrPosition) {
       this.attrPosition = {
-        start: startPos as Location,
+        start: startPos as Position,
         end: { position: this.position, line: this.line, column: this.column },
       };
     }
@@ -2200,7 +2204,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
         case q:
           // eslint-disable-next-line no-case-declarations
           const valuePos = this.includeAttrPosition ? {
-            start: startPos as Location,
+            start: startPos as Position,
             end: {
               position: this.position,
               line: this.line,
@@ -2286,7 +2290,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
         }
         // eslint-disable-next-line no-case-declarations
         const valuePos = this.includeAttrPosition ? {
-          start: startPos as Location,
+          start: startPos as Position,
           end: {
             position: this.position,
             line: this.line,
@@ -2491,7 +2495,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
 
   private pushAttribNS(
     name: string, value: string,
-    namePosition?: Position, valuePosition?: Position,
+    namePosition?: Location, valuePosition?: Location,
   ): void {
     const { prefix, local } = this.qname(name);
     const attr = !this.includeAttrPosition ?
