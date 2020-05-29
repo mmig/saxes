@@ -321,11 +321,44 @@ export type EventNameToHandler<O, N extends EventName> = {
   "ready": ReadyHandler;
 }[N];
 
+export interface Location {
+  /** The line number. */
+  line: number;
+
+  /** The column within the line. */
+  column: number;
+
+  /** The position/offset from the start of the document. */
+  position: number;
+}
+
+/**
+ * The position of an element within the document
+ */
+export interface Position {
+  /** The start position of the element. */
+  start: Location;
+  /** The end position of the element. */
+  end: Location;
+}
+
+/**
+ * If attribute positions are enabled, includes the position of the
+ * attribute's name and value.
+ */
+export interface AttributePosition {
+  /** The position of the attribute's name. */
+  namePosition?: Position;
+
+  /** The position of the attribute's value. */
+  valuePosition?: Position;
+}
+
 /**
  * This interface defines the structure of attributes when the parser is
  * processing namespaces (created with ``xmlns: true``).
  */
-export interface SaxesAttributeNS {
+export interface SaxesAttributeNS extends AttributePosition {
   /**
    * The attribute's name. This is the combination of prefix and local name.
    * For instance ``a:b="c"`` would have ``a:b`` for name.
@@ -362,7 +395,7 @@ export type SaxesAttributeNSIncomplete = Exclude<SaxesAttributeNS, "uri">;
  * This interface defines the structure of attributes when the parser is
  * NOT processing namespaces (created with ``xmlns: false``).
  */
-export interface SaxesAttributePlain {
+export interface SaxesAttributePlain extends AttributePosition {
   /**
    * The attribute's name.
    */
@@ -489,6 +522,13 @@ export interface CommonOptions {
   position?: boolean;
 
   /**
+   * Whether to include attribute positions in results.
+   * Option ``position`` must be enabled for this.
+   * Unset means ``false``.
+   */
+  attributePosition?: boolean;
+
+  /**
    * A file name to use for error reporting. "File name" is a loose concept. You
    * could use a URL to some resource, or any descriptive name you like.
    */
@@ -572,6 +612,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private readonly fragmentOpt: boolean;
   private readonly xmlnsOpt: boolean;
   private readonly trackPosition: boolean;
+  private readonly includeAttrPosition: boolean;
   private readonly fileName?: string;
   private readonly nameStartCheck: (c: number) => boolean;
   private readonly nameCheck: (c: number) => boolean;
@@ -590,6 +631,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private chunk!: string;
   private chunkPosition!: number;
   private i!: number;
+
+  private attrPosition?: Position;
 
   //
   // We use prevI to allow "ungetting" the previously read code point. Note
@@ -617,7 +660,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private doctype!: boolean;
   private getCode!: () => number;
   private isChar!: (c: number) => boolean;
-  private pushAttrib!: (name: string, value: string) => void;
+  private pushAttrib!: (name: string, value: string,
+    namePosition?: Position, valuePosition?: Position) => void;
   private _closed!: boolean;
   private currentXMLVersion!: string;
   private readonly stateTable: ((this: SaxesParser<O>) => void)[];
@@ -681,6 +725,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     this.fragmentOpt = !!(this.opt.fragment as boolean);
     const xmlnsOpt = this.xmlnsOpt = !!(this.opt.xmlns as boolean);
     this.trackPosition = this.opt.position !== false;
+    this.includeAttrPosition = this.trackPosition &&
+      this.opt.attributePosition === true;
     this.fileName = this.opt.fileName;
 
     if (xmlnsOpt) {
@@ -2066,7 +2112,19 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   }
 
   private sAttribName(): void {
+    this.attrPosition = undefined;
+    const startPos = !this.includeAttrPosition ? undefined : {
+      position: this.position,
+      line: this.line,
+      column: this.column,
+    };
     const c = this.captureNameChars();
+    if (this.includeAttrPosition) {
+      this.attrPosition = {
+        start: startPos as Location,
+        end: { position: this.position, line: this.line, column: this.column },
+      };
+    }
     if (c === EQUAL) {
       this.state = S_ATTRIB_VALUE;
     }
@@ -2075,7 +2133,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     }
     else if (c === GREATER) {
       this.fail("attribute without value.");
-      this.pushAttrib(this.name, this.name);
+      this.pushAttrib(this.name,
+                      this.name, this.attrPosition, this.attrPosition);
       this.name = this.text = "";
       this.openTag();
     }
@@ -2130,12 +2189,27 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     // here is faster than using captureTo.
     const { q, chunk } = this;
     let { i: start } = this;
+    const startPos = !this.includeAttrPosition ? undefined : {
+      position: this.position,
+      line: this.line,
+      column: this.column,
+    };
     // eslint-disable-next-line no-constant-condition
     while (true) {
       switch (this.getCode()) {
         case q:
+          // eslint-disable-next-line no-case-declarations
+          const valuePos = this.includeAttrPosition ? {
+            start: startPos as Location,
+            end: {
+              position: this.position,
+              line: this.line,
+              column: this.column,
+            },
+          } : undefined;
           this.pushAttrib(this.name,
-                          this.text + chunk.slice(start, this.prevI));
+                          this.text + chunk.slice(start, this.prevI),
+                          this.attrPosition, valuePos);
           this.name = this.text = "";
           this.q = null;
           this.state = S_ATTRIB_VALUE_CLOSED;
@@ -2190,6 +2264,11 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     // contract that saxes upholds states that upon failure, it is not safe to
     // rely on the data passed to event handlers (other than
     // ``onerror``). Passing "bad" data is not a problem.
+    const startPos = !this.includeAttrPosition ? undefined : {
+      position: this.position,
+      line: this.line,
+      column: this.column,
+    };
     const c = this.captureTo(ATTRIB_VALUE_UNQUOTED_TERMINATOR);
     switch (c) {
       case AMP:
@@ -2205,7 +2284,16 @@ export class SaxesParser<O extends SaxesOptions = {}> {
         if (this.text.includes("]]>")) {
           this.fail("the string \"]]>\" is disallowed in char data.");
         }
-        this.pushAttrib(this.name, this.text);
+        // eslint-disable-next-line no-case-declarations
+        const valuePos = this.includeAttrPosition ? {
+          start: startPos as Location,
+          end: {
+            position: this.position,
+            line: this.line,
+            column: this.column,
+          },
+        } : undefined;
+        this.pushAttrib(this.name, this.text, this.attrPosition, valuePos);
         this.name = this.text = "";
         if (c === GREATER) {
           this.openTag();
@@ -2401,9 +2489,14 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     }
   }
 
-  private pushAttribNS(name: string, value: string): void {
+  private pushAttribNS(
+    name: string, value: string,
+    namePosition?: Position, valuePosition?: Position,
+  ): void {
     const { prefix, local } = this.qname(name);
-    const attr = { name, prefix, local, value };
+    const attr = !this.includeAttrPosition ?
+      { name, prefix, local, value } :
+      { name, prefix, local, value, namePosition, valuePosition };
     this.attribList.push(attr);
     // eslint-disable-next-line no-unused-expressions
     this.attributeHandler?.(attr as AttributeEventForOptions<O>);
@@ -2422,8 +2515,12 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     }
   }
 
-  private pushAttribPlain(name: string, value: string): void {
-    const attr = { name, value };
+  private pushAttribPlain(
+    name: string, value: string,
+    namePosition?: Position, valuePosition?: Position,
+  ): void {
+    const attr = !this.includeAttrPosition ? { name, value } :
+      { name, value, namePosition, valuePosition };
     this.attribList.push(attr);
     // eslint-disable-next-line no-unused-expressions
     this.attributeHandler?.(attr as AttributeEventForOptions<O>);
