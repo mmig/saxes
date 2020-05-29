@@ -395,7 +395,7 @@ export type SaxesAttributeNSIncomplete = Exclude<SaxesAttributeNS, "uri">;
  * This interface defines the structure of attributes when the parser is
  * NOT processing namespaces (created with ``xmlns: false``).
  */
-export interface SaxesAttributePlain extends AttributePosition {
+export interface SaxesAttributePlain {
   /**
    * The attribute's name.
    */
@@ -522,13 +522,6 @@ export interface CommonOptions {
   position?: boolean;
 
   /**
-   * Whether to include attribute positions in results.
-   * Option ``position`` must be enabled for this.
-   * Unset means ``false``.
-   */
-  attributePosition?: boolean;
-
-  /**
    * A file name to use for error reporting. "File name" is a loose concept. You
    * could use a URL to some resource, or any descriptive name you like.
    */
@@ -551,6 +544,13 @@ export interface NSOptions {
    * prefix on its own.
    */
   resolvePrefix?: ResolvePrefix;
+
+  /**
+   * Whether to include attribute positions in results.
+   * Options ``xmlns`` and ``position`` must be enabled for this.
+   * Unset means ``false``.
+   */
+  attributePosition?: boolean;
 }
 
 export interface NSOptionsWithoutNamespaces extends NSOptions {
@@ -725,7 +725,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     this.fragmentOpt = !!(this.opt.fragment as boolean);
     const xmlnsOpt = this.xmlnsOpt = !!(this.opt.xmlns as boolean);
     this.trackPosition = this.opt.position !== false;
-    this.includeAttrPosition = this.trackPosition &&
+    this.includeAttrPosition = xmlnsOpt && this.trackPosition &&
       this.opt.attributePosition === true;
     this.fileName = this.opt.fileName;
 
@@ -2515,12 +2515,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     }
   }
 
-  private pushAttribPlain(
-    name: string, value: string,
-    namePosition?: Position, valuePosition?: Position,
-  ): void {
-    const attr = !this.includeAttrPosition ? { name, value } :
-      { name, value, namePosition, valuePosition };
+  private pushAttribPlain(name: string, value: string): void {
+    const attr = { name, value };
     this.attribList.push(attr);
     // eslint-disable-next-line no-unused-expressions
     this.attributeHandler?.(attr as AttributeEventForOptions<O>);
