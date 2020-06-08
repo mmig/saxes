@@ -636,7 +636,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private chunkPosition!: number;
   private i!: number;
 
-  private attrPosition?: Location;
+  private attrNamePos?: Location;
 
   //
   // We use prevI to allow "ungetting" the previously read code point. Note
@@ -664,8 +664,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   private doctype!: boolean;
   private getCode!: () => number;
   private isChar!: (c: number) => boolean;
-  private pushAttrib!: (name: string, value: string,
-    namePosition?: Location, valuePosition?: Location) => void;
+  private pushAttrib!: (name: string,
+    value: string, valueStartPosition?: Position) => void;
   private _closed!: boolean;
   private currentXMLVersion!: string;
   private readonly stateTable: ((this: SaxesParser<O>) => void)[];
@@ -746,8 +746,9 @@ export class SaxesParser<O extends SaxesOptions = {}> {
       this.isName = isNCName;
       // eslint-disable-next-line @typescript-eslint/unbound-method
       this.processAttribs = this.processAttribsNS;
-      // eslint-disable-next-line @typescript-eslint/unbound-method
-      this.pushAttrib = this.pushAttribNS;
+      this.pushAttrib = this.includeAttrPosition ?
+        // eslint-disable-next-line @typescript-eslint/unbound-method
+        this.pushAttribPosNS : this.pushAttribNS;
 
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2116,7 +2117,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
   }
 
   private sAttribName(): void {
-    this.attrPosition = undefined;
+    this.attrNamePos = undefined;
     const startPos = !this.includeAttrPosition ? undefined : {
       position: this.position,
       line: this.line,
@@ -2124,7 +2125,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     };
     const c = this.captureNameChars();
     if (this.includeAttrPosition) {
-      this.attrPosition = {
+      this.attrNamePos = {
         start: startPos as Position,
         end: { position: this.position, line: this.line, column: this.column },
       };
@@ -2138,7 +2139,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     else if (c === GREATER) {
       this.fail("attribute without value.");
       this.pushAttrib(this.name,
-                      this.name, this.attrPosition, this.attrPosition);
+                      this.name, startPos);
       this.name = this.text = "";
       this.openTag();
     }
@@ -2202,18 +2203,8 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     while (true) {
       switch (this.getCode()) {
         case q:
-          // eslint-disable-next-line no-case-declarations
-          const valuePos = this.includeAttrPosition ? {
-            start: startPos as Position,
-            end: {
-              position: this.position,
-              line: this.line,
-              column: this.column,
-            },
-          } : undefined;
           this.pushAttrib(this.name,
-                          this.text + chunk.slice(start, this.prevI),
-                          this.attrPosition, valuePos);
+                          this.text + chunk.slice(start, this.prevI), startPos);
           this.name = this.text = "";
           this.q = null;
           this.state = S_ATTRIB_VALUE_CLOSED;
@@ -2288,16 +2279,7 @@ export class SaxesParser<O extends SaxesOptions = {}> {
         if (this.text.includes("]]>")) {
           this.fail("the string \"]]>\" is disallowed in char data.");
         }
-        // eslint-disable-next-line no-case-declarations
-        const valuePos = this.includeAttrPosition ? {
-          start: startPos as Position,
-          end: {
-            position: this.position,
-            line: this.line,
-            column: this.column,
-          },
-        } : undefined;
-        this.pushAttrib(this.name, this.text, this.attrPosition, valuePos);
+        this.pushAttrib(this.name, this.text, startPos);
         this.name = this.text = "";
         if (c === GREATER) {
           this.openTag();
@@ -2493,14 +2475,42 @@ export class SaxesParser<O extends SaxesOptions = {}> {
     }
   }
 
-  private pushAttribNS(
-    name: string, value: string,
-    namePosition?: Location, valuePosition?: Location,
+  private pushAttribNS(name: string, value: string): void {
+    const { prefix, local } = this.qname(name);
+    const attr = { name, prefix, local, value };
+    this.attribList.push(attr);
+    // eslint-disable-next-line no-unused-expressions
+    this.attributeHandler?.(attr as AttributeEventForOptions<O>);
+    if (prefix === "xmlns") {
+      const trimmed = value.trim();
+      if (this.currentXMLVersion === "1.0" && trimmed === "") {
+        this.fail("invalid attempt to undefine prefix in XML 1.0");
+      }
+      this.topNS![local] = trimmed;
+      nsPairCheck(this, local, trimmed);
+    }
+    else if (name === "xmlns") {
+      const trimmed = value.trim();
+      this.topNS![""] = trimmed;
+      nsPairCheck(this, "", trimmed);
+    }
+  }
+
+  private pushAttribPosNS(
+    name: string, value: string, valueStartPosition?: Position,
   ): void {
     const { prefix, local } = this.qname(name);
-    const attr = !this.includeAttrPosition ?
-      { name, prefix, local, value } :
-      { name, prefix, local, value, namePosition, valuePosition };
+    const namePosition = this.attrNamePos;
+    const valuePosition = {
+      start: valueStartPosition as Position,
+      end: {
+        position: this.position,
+        line: this.line,
+        column: this.column,
+      },
+    };
+    const attr = { name, prefix, local, value, namePosition, valuePosition };
+    // DEV NOTE [russa] the following is same as in pushAttribNS() impl.!
     this.attribList.push(attr);
     // eslint-disable-next-line no-unused-expressions
     this.attributeHandler?.(attr as AttributeEventForOptions<O>);
